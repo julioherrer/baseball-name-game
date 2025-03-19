@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: baseball-name-game
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: baseball-name-game
+  template:
+    metadata:
+      labels:
+        app: baseball-name-game
+    spec:
+      containers:
+      - name: baseball-name-game
+        image: baseball-name-game:latest
+        ports:
+        - containerPort: 5900
+        env:
+        - name: DISPLAY
+          value: ":99" 
