@@ -17,8 +17,12 @@ pipeline {
             }
         }
         stage('Deploy to Kubernetes') {
-            steps {
-                sh 'kubectl set image deployment/$KUBERNETES_DEPLOYMENT baseball-name-game=$DOCKER_IMAGE'
+    steps {
+        sh 'kubectl apply -f deployment.yaml'
+        sh 'kubectl set image deployment/baseball-name-game baseball-name-game=julioherrera04/baseball-name-game:v2'
+    }
+}
+
             }
         }
     }
