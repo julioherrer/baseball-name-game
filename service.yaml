@@ -1,12 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: baseball-name-game
+  name: baseball-name-game-service
 spec:
-  type: NodePort
-  ports:
-  - port: 5900
-    targetPort: 5900
-    nodePort: 30900
   selector:
-    app: baseball-name-game 
+    app: baseball-name-game
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 30000
+  type: NodePort 

@@ -14,9 +14,34 @@ spec:
     spec:
       containers:
       - name: baseball-name-game
-        image: baseball-name-game:latest
+        image: baseball-game:latest
         ports:
-        - containerPort: 5900
+        - containerPort: 8000
         env:
-        - name: DISPLAY
-          value: ":99" 
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: app-volume
+          mountPath: /app
+      volumes:
+      - name: app-volume
+        emptyDir: {} 
