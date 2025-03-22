@@ -6,7 +6,7 @@
     
     <div class="row mb-4">
         <div class="col-md-6">
-            <div class="timer" id="timer">60</div>
+            <div class="timer" id="timer">10</div>
             <div>Time Left</div>
         </div>
         <div class="col-md-6">
@@ -33,19 +33,80 @@
         </form>
     </div>
 
-    <div>
+    <div class="mb-4">
         <button id="start-button" class="btn btn-success btn-lg">Start Game</button>
+        <button id="rules-button" class="btn btn-secondary btn-lg ms-2">Show Rules</button>
     </div>
 
     <div id="alert" class="alert mt-3" style="display: none;"></div>
+
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <h3>High Scores</h3>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Player</th>
+                            <th>Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for name, score in high_scores %}
+                        <tr>
+                            <td>{{ name }}</td>
+                            <td>{{ score }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rules Modal -->
+<div class="modal fade" id="rulesModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Game Rules</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="rules-content"></div>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
 let gameInterval;
-let timeLeft = 60;
+let timeLeft = 10;
 let isListening = false;
+let rulesModal;
+
+$(document).ready(function() {
+    rulesModal = new bootstrap.Modal(document.getElementById('rulesModal'));
+    
+    $('#start-button').click(startGame);
+    $('#rules-button').click(showRules);
+    
+    $('#answer-form').submit(function(e) {
+        e.preventDefault();
+        const answer = $('#answer').val().trim();
+        if (answer) {
+            checkAnswer(answer);
+        }
+    });
+
+    $('#speak-button').click(startSpeechRecognition);
+    
+    // Check microphone availability
+    checkMicrophone();
+});
 
 function updateTimer() {
     timeLeft--;
@@ -60,7 +121,8 @@ function startGame() {
         $('#current-player').text(response.current_player);
         $('#answer-form').removeClass('d-none');
         $('#start-button').addClass('d-none');
-        timeLeft = 60;
+        $('#rules-button').addClass('d-none');
+        timeLeft = 10;
         $('#timer').text(timeLeft);
         $('#score').text('0');
         gameInterval = setInterval(updateTimer, 1000);
@@ -81,6 +143,8 @@ function checkAnswer(answer, isSpeech = false) {
                 $('#current-player').text(response.current_player);
                 $('#score').text(response.score);
                 $('#answer').val('');
+                timeLeft = response.time_left;
+                $('#timer').text(timeLeft);
                 showAlert('Correct! Well done!', 'success');
             } else {
                 showAlert('Incorrect. Try again!', 'danger');
@@ -134,22 +198,46 @@ function endGame() {
     clearInterval(gameInterval);
     $('#answer-form').addClass('d-none');
     $('#start-button').removeClass('d-none');
+    $('#rules-button').removeClass('d-none');
     $('#current-player').text('Game Over!');
-    showAlert(`Game Over! Your final score: ${$('#score').text()}`, 'info');
+    
+    const score = parseInt($('#score').text());
+    const playerName = prompt('Enter your name for the high score:', 'Anonymous');
+    
+    if (playerName) {
+        $.ajax({
+            url: '/save_score/',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                player_name: playerName,
+                score: score
+            }),
+            success: function(response) {
+                if (response.success) {
+                    location.reload(); // Refresh to show updated high scores
+                }
+            }
+        });
+    }
+    
+    showAlert(`Game Over! Your final score: ${score}`, 'info');
 }
 
-$(document).ready(function() {
-    $('#start-button').click(startGame);
-    
-    $('#answer-form').submit(function(e) {
-        e.preventDefault();
-        const answer = $('#answer').val().trim();
-        if (answer) {
-            checkAnswer(answer);
+function showRules() {
+    $.get('/show_rules/', function(response) {
+        $('#rules-content').html(response.rules.replace(/\n/g, '<br>'));
+        rulesModal.show();
+    });
+}
+
+function checkMicrophone() {
+    $.get('/check_microphone/', function(response) {
+        if (!response.available) {
+            $('#speak-button').prop('disabled', true);
+            showAlert('Microphone not available. Voice input disabled.', 'warning');
         }
     });
-
-    $('#speak-button').click(startSpeechRecognition);
-});
+}
 </script>
 {% endblock %} 

@@ -6,6 +6,11 @@ import random
 import json
 import speech_recognition as sr
 import time
+import os
+import subprocess
+import platform
+import webbrowser
+from datetime import datetime
 
 # List of MLB players (current Braves players for 2024)
 MLB_PLAYERS = [
@@ -84,20 +89,38 @@ class GameState:
     def __init__(self):
         self.current_player = None
         self.score = 0
-        self.time_left = 60
+        self.time_left = 10
         self.is_running = False
         self.recognizer = sr.Recognizer()
+        self.high_scores = []
+        self.load_high_scores()
+
+    def load_high_scores(self):
+        try:
+            with open('high_scores.txt', 'r') as f:
+                self.high_scores = [line.strip().split(',') for line in f]
+                self.high_scores.sort(key=lambda x: int(x[1]), reverse=True)
+                self.high_scores = self.high_scores[:5]  # Keep top 5
+        except FileNotFoundError:
+            self.high_scores = []
+
+    def save_high_scores(self):
+        with open('high_scores.txt', 'w') as f:
+            for name, score in self.high_scores:
+                f.write(f"{name},{score}\n")
 
 game_state = GameState()
 
 def index(request):
-    return render(request, 'game/index.html')
+    return render(request, 'game/index.html', {
+        'high_scores': game_state.high_scores
+    })
 
 @require_http_methods(["GET"])
 def start_game(request):
     game_state.current_player = random.choice(MLB_PLAYERS)
     game_state.score = 0
-    game_state.time_left = 60
+    game_state.time_left = 10
     game_state.is_running = True
     return JsonResponse({
         'current_player': game_state.current_player,
@@ -112,6 +135,7 @@ def check_answer(request):
         data = json.loads(request.body)
         answer = data.get('answer', '').strip()
         is_speech = data.get('is_speech', False)
+        player_name = data.get('player_name', '')
         
         if not answer:
             return JsonResponse({
@@ -125,12 +149,14 @@ def check_answer(request):
         if is_correct:
             game_state.score += 1
             game_state.current_player = random.choice(MLB_PLAYERS)
+            game_state.time_left = 10
         
         return JsonResponse({
             'correct': is_correct,
             'score': game_state.score,
             'current_player': game_state.current_player,
-            'spoken_name': answer if is_speech else None
+            'spoken_name': answer if is_speech else None,
+            'time_left': game_state.time_left
         })
     except json.JSONDecodeError:
         return JsonResponse({
@@ -176,3 +202,48 @@ def get_state(request):
         'time_left': game_state.time_left,
         'is_running': game_state.is_running
     })
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def save_score(request):
+    try:
+        data = json.loads(request.body)
+        player_name = data.get('player_name', 'Anonymous')
+        score = data.get('score', 0)
+        
+        game_state.high_scores.append([player_name, str(score)])
+        game_state.high_scores.sort(key=lambda x: int(x[1]), reverse=True)
+        game_state.high_scores = game_state.high_scores[:5]  # Keep top 5
+        game_state.save_high_scores()
+        
+        return JsonResponse({
+            'success': True,
+            'high_scores': game_state.high_scores
+        })
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+@require_http_methods(["GET"])
+def show_rules(request):
+    rules = """
+    Baseball Name Game Rules:
+    1. You have 10 seconds to name each MLB player
+    2. You can type the name or use voice recognition
+    3. Names are case-insensitive
+    4. You get 1 point for each correct answer
+    5. The timer resets to 10 seconds after each correct answer
+    6. The game ends if you don't answer within 10 seconds
+    7. Try to beat your high score!
+    """
+    return JsonResponse({'rules': rules})
+
+@require_http_methods(["GET"])
+def check_microphone(request):
+    try:
+        with sr.Microphone() as source:
+            return JsonResponse({'available': True})
+    except Exception:
+        return JsonResponse({'available': False})
