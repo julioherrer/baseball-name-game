@@ -402,3 +402,47 @@ def get_state(request):
         'score': game_state.score,
         'time_left': game_state.time_left
     })
+
+def start_speech_recognition(request):
+    """Start speech recognition and return the recognized text"""
+    try:
+        r = sr.Recognizer()
+        with sr.Microphone() as source:
+            audio = r.listen(source, timeout=5)
+            text = r.recognize_google(audio)
+            return JsonResponse({'text': text})
+    except sr.UnknownValueError:
+        return JsonResponse({'error': 'Could not understand audio'})
+    except sr.RequestError as e:
+        return JsonResponse({'error': f'Could not request results; {str(e)}'})
+    except Exception as e:
+        return JsonResponse({'error': str(e)})
+
+def save_score(request):
+    """Save the current score"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            score = data.get('score', 0)
+            player_name = data.get('player_name', 'Anonymous')
+            
+            # Load existing scores
+            scores = []
+            if os.path.exists('high_scores.json'):
+                with open('high_scores.json', 'r') as f:
+                    scores = json.load(f)
+            
+            # Add new score
+            scores.append({'name': player_name, 'score': score})
+            
+            # Sort scores and keep top 5
+            scores = sorted(scores, key=lambda x: x['score'], reverse=True)[:5]
+            
+            # Save scores
+            with open('high_scores.json', 'w') as f:
+                json.dump(scores, f)
+            
+            return JsonResponse({'success': True})
+        except Exception as e:
+            return JsonResponse({'error': str(e)})
+    return JsonResponse({'error': 'Invalid request method'})
