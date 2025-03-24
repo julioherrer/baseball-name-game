@@ -1,66 +1,50 @@
 {% extends 'game/base.html' %}
 
 {% block content %}
-<div class="game-container text-center">
-    <h1 class="mb-4">Baseball Name Game</h1>
+<div class="game-container">
+    <div class="timer" id="timer">10</div>
+    <div class="score" id="score">0</div>
     
-    <div class="row mb-4">
-        <div class="col-md-6">
-            <div class="timer" id="timer">10</div>
-            <div>Time Left</div>
+    <h2 id="current-player">Ready to Play?</h2>
+
+    <form id="answer-form" class="d-none">
+        <div class="input-group">
+            <input type="text" class="form-control" id="answer" placeholder="Enter player name..." autocomplete="off">
+            <button class="btn btn-primary" type="submit">Submit</button>
         </div>
-        <div class="col-md-6">
-            <div class="score" id="score">0</div>
-            <div>Score</div>
+        <div class="text-center mt-2">
+            <button type="button" class="btn btn-info" id="speak-button">
+                <i class="fas fa-microphone"></i> Speak Name
+            </button>
         </div>
+    </form>
+
+    <div class="text-center">
+        <button id="start-button" class="btn btn-success">Start Game</button>
+        <button id="rules-button" class="btn btn-secondary">Show Rules</button>
     </div>
 
-    <div class="mb-4">
-        <h2 id="current-player" class="display-4">Ready to Play?</h2>
-    </div>
+    <div id="alert" class="alert"></div>
 
-    <div class="mb-4">
-        <form id="answer-form" class="d-none">
-            <div class="input-group mb-3">
-                <input type="text" class="form-control form-control-lg" id="answer" placeholder="Enter player name..." autocomplete="off">
-                <button class="btn btn-primary btn-lg" type="submit">Submit</button>
-            </div>
-            <div class="mt-3">
-                <button type="button" class="btn btn-info btn-lg" id="speak-button">
-                    <i class="fas fa-microphone"></i> Speak Name
-                </button>
-            </div>
-        </form>
-    </div>
-
-    <div class="mb-4">
-        <button id="start-button" class="btn btn-success btn-lg">Start Game</button>
-        <button id="rules-button" class="btn btn-secondary btn-lg ms-2">Show Rules</button>
-    </div>
-
-    <div id="alert" class="alert mt-3" style="display: none;"></div>
-
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <h3>High Scores</h3>
-            <div class="table-responsive">
-                <table class="table table-striped">
-                    <thead>
-                        <tr>
-                            <th>Player</th>
-                            <th>Score</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for name, score in high_scores %}
-                        <tr>
-                            <td>{{ name }}</td>
-                            <td>{{ score }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+    <div class="high-scores">
+        <h4 class="text-center mb-2">High Scores</h4>
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for name, score in high_scores %}
+                    <tr>
+                        <td>{{ name }}</td>
+                        <td>{{ score }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
     </div>
 </div>
@@ -197,7 +181,7 @@ function startSpeechRecognition() {
 
 function showAlert(message, type) {
     const alert = $('#alert');
-    alert.removeClass().addClass(`alert alert-${type} mt-3`);
+    alert.removeClass().addClass(`alert alert-${type}`);
     alert.text(message).show();
     setTimeout(() => alert.fadeOut(), 3000);
 }
