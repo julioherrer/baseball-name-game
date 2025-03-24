@@ -248,43 +248,49 @@ MLB_PLAYERS = list(set([
 
 class GameState:
     def __init__(self):
-        self.current_player = None
         self.score = 0
-        self.time_left = 10  # Changed to 10 seconds per player
-        self.is_running = False
+        self.current_player = ""
+        self.required_letter = ""
+        self.is_listening = False
+        self.time_left = 10
         self.recognizer = sr.Recognizer()
-        self.high_scores = []
-        self.load_high_scores()
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.energy_threshold = 4000
+        self.recognizer.dynamic_energy_adjustment_ratio = 1.5
 
-    def load_high_scores(self):
-        try:
-            with open('high_scores.txt', 'r') as f:
-                self.high_scores = [line.strip().split(',') for line in f]
-                self.high_scores.sort(key=lambda x: int(x[1]), reverse=True)
-                self.high_scores = self.high_scores[:5]  # Keep top 5
-        except FileNotFoundError:
-            self.high_scores = []
+    def get_next_player(self, spoken_name):
+        # Get the first letter of the spoken player's last name
+        last_name_letter = spoken_name.split()[-1][0]
+        
+        # Find a valid player whose first name starts with that letter
+        valid_players = [p for p in MLB_PLAYERS 
+                        if p.split()[0][0].lower() == last_name_letter.lower() 
+                        and p != spoken_name]
+        
+        if valid_players:
+            self.current_player = random.choice(valid_players)
+            self.required_letter = self.current_player.split()[-1][0]
+            return True
+        return False
 
-    def save_high_scores(self):
-        with open('high_scores.txt', 'w') as f:
-            for name, score in self.high_scores:
-                f.write(f"{name},{score}\n")
-
+# Global game state
 game_state = GameState()
 
 def index(request):
     return render(request, 'game/index.html', {
-        'high_scores': game_state.high_scores
+        'high_scores': []  # We'll implement high scores later
     })
 
 @require_http_methods(["GET"])
 def start_game(request):
-    game_state.current_player = random.choice(MLB_PLAYERS)
     game_state.score = 0
-    game_state.time_left = 10  # Start with 10 seconds
-    game_state.is_running = True
+    game_state.current_player = random.choice(MLB_PLAYERS)
+    game_state.required_letter = game_state.current_player.split()[-1][0]
+    game_state.time_left = 10
+    
     return JsonResponse({
         'current_player': game_state.current_player,
+        'required_letter': game_state.required_letter,
         'score': game_state.score,
         'time_left': game_state.time_left
     })
@@ -292,118 +298,107 @@ def start_game(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 def check_answer(request):
-    try:
-        data = json.loads(request.body)
-        answer = data.get('answer', '').strip()
-        is_speech = data.get('is_speech', False)
+    data = json.loads(request.body)
+    spoken_name = data.get('answer', '').strip().title()
+    
+    # Check if the first letter of the FIRST name matches the required letter
+    spoken_first_name = spoken_name.split()[0]
+    if spoken_first_name[0].lower() == game_state.required_letter.lower():
+        game_state.score += 1
         
-        if not answer:
+        if game_state.get_next_player(spoken_name):
             return JsonResponse({
-                'correct': False,
-                'message': 'Please provide an answer'
-            }, status=400)
-        
-        # Case-insensitive comparison
-        is_correct = answer.lower() == game_state.current_player.lower()
-        
-        if is_correct:
-            game_state.score += 1
-            game_state.current_player = random.choice(MLB_PLAYERS)
-            game_state.time_left = 10  # Reset timer to 10 seconds after correct answer
-        
-        return JsonResponse({
-            'correct': is_correct,
-            'score': game_state.score,
-            'current_player': game_state.current_player,
-            'spoken_name': answer if is_speech else None,
-            'time_left': game_state.time_left
-        })
-    except json.JSONDecodeError:
-        return JsonResponse({
-            'correct': False,
-            'message': 'Invalid JSON data'
-        }, status=400)
-
-@csrf_exempt
-@require_http_methods(["POST"])
-def start_speech_recognition(request):
-    try:
-        with sr.Microphone() as source:
-            game_state.recognizer.adjust_for_ambient_noise(source)
-            audio = game_state.recognizer.listen(source)
-            
-            try:
-                spoken_name = game_state.recognizer.recognize_google(audio)
-                return JsonResponse({
-                    'success': True,
-                    'spoken_name': spoken_name
-                })
-            except sr.UnknownValueError:
-                return JsonResponse({
-                    'success': False,
-                    'message': 'Could not understand audio'
-                }, status=400)
-            except sr.RequestError:
-                return JsonResponse({
-                    'success': False,
-                    'message': 'Could not request results'
-                }, status=500)
-    except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'message': str(e)
-        }, status=500)
-
-@require_http_methods(["GET"])
-def get_state(request):
+                'correct': True,
+                'current_player': game_state.current_player,
+                'required_letter': game_state.required_letter,
+                'score': game_state.score,
+                'time_left': 10,  # Reset timer on correct answer
+                'message': f"Correct! {spoken_name}"
+            })
+        else:
+            return JsonResponse({
+                'correct': True,
+                'game_over': True,
+                'win': True,
+                'score': game_state.score,
+                'message': "No more valid players available! You win!"
+            })
+    
     return JsonResponse({
-        'current_player': game_state.current_player,
-        'score': game_state.score,
-        'time_left': game_state.time_left,
-        'is_running': game_state.is_running
+        'correct': False,
+        'message': f"Invalid name. First name must start with '{game_state.required_letter}': {spoken_name}"
     })
 
 @csrf_exempt
 @require_http_methods(["POST"])
-def save_score(request):
+def start_speech(request):
     try:
-        data = json.loads(request.body)
-        player_name = data.get('player_name', 'Anonymous')
-        score = data.get('score', 0)
-        
-        game_state.high_scores.append([player_name, str(score)])
-        game_state.high_scores.sort(key=lambda x: int(x[1]), reverse=True)
-        game_state.high_scores = game_state.high_scores[:5]  # Keep top 5
-        game_state.save_high_scores()
-        
+        with sr.Microphone() as source:
+            game_state.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            audio = game_state.recognizer.listen(source, timeout=4, phrase_time_limit=3)
+            spoken_name = game_state.recognizer.recognize_google(audio)
+            
+            return JsonResponse({
+                'success': True,
+                'spoken_name': spoken_name.strip().title()
+            })
+    except sr.UnknownValueError:
         return JsonResponse({
-            'success': True,
-            'high_scores': game_state.high_scores
-        })
+            'success': False,
+            'message': "Could not understand audio"
+        }, status=400)
+    except sr.RequestError:
+        return JsonResponse({
+            'success': False,
+            'message': "Could not reach Google Speech Recognition service"
+        }, status=400)
     except Exception as e:
         return JsonResponse({
             'success': False,
-            'message': str(e)
-        }, status=500)
+            'message': f"Error occurred while listening: {str(e)}"
+        }, status=400)
 
 @require_http_methods(["GET"])
 def show_rules(request):
-    rules = """
-    Baseball Name Game Rules:
-    1. You have 10 seconds to name each MLB player
-    2. You can type the name or use voice recognition
-    3. Names are case-insensitive
-    4. You get 1 point for each correct answer
-    5. The timer resets to 10 seconds after each correct answer
-    6. The game ends if you don't answer within 10 seconds
-    7. Try to beat your high score!
-    """
-    return JsonResponse({'rules': rules})
+    rules_text = """Baseball Name Game Rules:
+
+1. The game starts by showing you a baseball player's name
+2. You must say a player whose FIRST NAME starts with the 
+   first letter of the LAST NAME of the previous player
+3. You have 10 seconds to give each answer
+4. The clock resets to 10 seconds after each correct answer
+5. Game ends when the time runs out
+
+Example:
+If the game shows "Mookie Betts"
+- You need to say a player whose first name starts with 'B'
+- If you say "Bobby Witt Jr", that's correct!
+- Then you need a player whose first name starts with 'W'
+- And so on...
+
+Tips:
+- Speak clearly into your microphone
+- Watch the clock - you have 10 seconds per turn
+- Your score increases with each correct answer
+
+Ready to play? Click 'Start Game' to begin!"""
+    
+    return JsonResponse({'rules': rules_text})
 
 @require_http_methods(["GET"])
 def check_microphone(request):
     try:
         with sr.Microphone() as source:
+            game_state.recognizer.adjust_for_ambient_noise(source, duration=0.5)
             return JsonResponse({'available': True})
-    except Exception:
+    except:
         return JsonResponse({'available': False})
+
+def get_state(request):
+    """Return the current game state"""
+    return JsonResponse({
+        'current_player': game_state.current_player,
+        'required_letter': game_state.required_letter,
+        'score': game_state.score,
+        'time_left': game_state.time_left
+    })
