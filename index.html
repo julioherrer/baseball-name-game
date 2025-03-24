@@ -3,29 +3,24 @@
 {% block content %}
 <div class="game-container">
     <div class="title">Baseball Name Game</div>
-    
-    <div class="instructions" id="instructions">Press Start to begin</div>
-    
-    <div class="player-name" id="current-player"></div>
-    
+    <div class="timer" id="timer">10</div>
     <div class="score" id="score">Score: 0</div>
-    
+    <div class="instructions" id="instructions">Click 'Start Game' to begin!</div>
+    <div class="player-name" id="current-player"></div>
     <div class="result" id="result"></div>
     
     <div class="buttons">
-        <button id="start-button" class="btn">Start Game</button>
-        <button id="rules-button" class="btn">Show Rules</button>
+        <button id="startButton" class="btn btn-primary" onclick="startGame()">Start Game</button>
+        <button id="rulesButton" class="btn btn-secondary" onclick="showRules()">Show Rules</button>
     </div>
-    
-    <div class="timer" id="timer">Time: 10</div>
 </div>
 
 <!-- Rules Modal -->
-<div class="modal fade" id="rulesModal" tabindex="-1">
+<div class="modal fade" id="rulesModal" tabindex="-1" aria-labelledby="rulesModalLabel" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Game Rules</h5>
+                <h5 class="modal-title" id="rulesModalLabel">Game Rules</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
@@ -39,131 +34,207 @@
 {% block extra_js %}
 <script>
 let gameInterval;
-let timeLeft = 10;
 let isListening = false;
-let rulesModal;
-let lastUpdate = Date.now();
+let recognition = null;
 
-$(document).ready(function() {
-    rulesModal = new bootstrap.Modal(document.getElementById('rulesModal'));
+// Initialize Bootstrap modal
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize the rules modal
+    const rulesModal = new bootstrap.Modal(document.getElementById('rulesModal'));
     
-    $('#start-button').click(startGame);
-    $('#rules-button').click(showRules);
+    // Check microphone permissions
+    checkMicrophonePermission();
     
-    // Check microphone availability
-    checkMicrophone();
+    // Add event listeners for buttons
+    document.getElementById('startButton').addEventListener('click', startGame);
+    document.getElementById('rulesButton').addEventListener('click', showRules);
 });
 
-function updateTimer() {
-    const now = Date.now();
-    const delta = now - lastUpdate;
-    lastUpdate = now;
-    
-    timeLeft -= delta / 1000;
-    $('#timer').text(`Time: ${Math.ceil(timeLeft)}`);
-    
-    if (timeLeft <= 0) {
-        endGame();
+async function checkMicrophonePermission() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+        document.getElementById('instructions').textContent = 'Microphone enabled! Click "Start Game" to begin.';
+        return true;
+    } catch (err) {
+        console.error('Microphone permission error:', err);
+        document.getElementById('instructions').textContent = 
+            'Please enable microphone access in your browser settings to play. Click "Start Game" to begin.';
+        return false;
     }
 }
 
-function startGame() {
-    $.get('/start_game/', function(response) {
-        $('#current-player').text(response.current_player);
-        $('#instructions').text(`Say a player whose first name starts with '${response.required_letter}'!`);
-        timeLeft = 10;
-        lastUpdate = Date.now();
-        $('#timer').text('Time: 10');
-        $('#score').text('Score: 0');
+async function startGame() {
+    try {
+        const hasMic = await checkMicrophonePermission();
+        if (!hasMic) {
+            showResult('Please enable microphone access to play', false);
+            return;
+        }
+        
+        const response = await fetch('/start_game/');
+        if (!response.ok) {
+            throw new Error('Failed to start game');
+        }
+        
+        const data = await response.json();
+        document.getElementById('current-player').textContent = data.current_player;
+        document.getElementById('instructions').textContent = 
+            `Say a player whose first name starts with '${data.required_letter}'`;
+        document.getElementById('score').textContent = `Score: ${data.score}`;
+        document.getElementById('result').textContent = '';
+        startTimer();
         startListening();
-        gameInterval = setInterval(updateTimer, 16); // ~60fps for smoother timer
-    });
+    } catch (error) {
+        console.error('Error starting game:', error);
+        showResult('Error starting game. Please try again.', false);
+    }
+}
+
+function startTimer() {
+    if (gameInterval) clearInterval(gameInterval);
+    let timeLeft = 10;
+    document.getElementById('timer').textContent = timeLeft;
+    
+    gameInterval = setInterval(() => {
+        timeLeft--;
+        document.getElementById('timer').textContent = timeLeft;
+        
+        if (timeLeft <= 0) {
+            clearInterval(gameInterval);
+            endGame();
+        }
+    }, 1000);
 }
 
 function startListening() {
     if (isListening) return;
     
     isListening = true;
-    $('#instructions').text('Listening...');
+    document.getElementById('instructions').textContent = 'Listening... Speak now!';
     
-    $.ajax({
-        url: '/start_speech/',
+    fetch('/start_speech/', {
         method: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({}),
-        success: function(response) {
-            if (response.success) {
-                checkAnswer(response.spoken_name);
-            } else {
-                showResult('Could not understand audio. Please try again.', 'error');
-            }
-        },
-        error: function(xhr) {
-            showResult(xhr.responseJSON.message, 'error');
-        },
-        complete: function() {
-            isListening = false;
-            startListening(); // Continue listening
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken')
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Speech recognition failed');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success) {
+            console.log('Recognized:', data.spoken_name);
+            checkAnswer(data.spoken_name);
+        } else {
+            console.log('Recognition error:', data.message);
+            showResult(data.message, false);
+        }
+        // Continue listening after processing
+        if (isListening) {
+            setTimeout(startListening, 1000);
+        }
+    })
+    .catch(error => {
+        console.error('Speech recognition error:', error);
+        showResult('Error with speech recognition. Please try again.', false);
+        // Retry listening after error
+        if (isListening) {
+            setTimeout(startListening, 2000);
         }
     });
 }
 
 function checkAnswer(answer) {
-    $.ajax({
-        url: '/check_answer/',
+    if (!answer || answer.trim() === '') {
+        showResult('Please speak a player name', false);
+        return;
+    }
+
+    fetch('/check_answer/', {
         method: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({ answer: answer }),
-        success: function(response) {
-            if (response.correct) {
-                if (response.game_over) {
-                    clearInterval(gameInterval);
-                    showResult(response.message, 'success');
-                    setTimeout(startGame, 3000);
-                } else {
-                    $('#current-player').text(response.current_player);
-                    $('#instructions').text(`Say a player whose first name starts with '${response.required_letter}'!`);
-                    $('#score').text(`Score: ${response.score}`);
-                    timeLeft = response.time_left;
-                    lastUpdate = Date.now();
-                    showResult(response.message, 'success');
-                }
-            } else {
-                showResult(response.message, 'error');
-            }
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken')
+        },
+        body: JSON.stringify({ answer: answer.trim() })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.correct) {
+            document.getElementById('current-player').textContent = data.current_player;
+            document.getElementById('instructions').textContent = 
+                `Say a player whose first name starts with '${data.required_letter}'`;
+            document.getElementById('score').textContent = `Score: ${data.score}`;
+            showResult(data.message, true);
+            startTimer();
+        } else {
+            showResult(data.message, false);
         }
+    })
+    .catch(error => {
+        console.error('Error checking answer:', error);
+        showResult('Error checking answer. Please try again.', false);
     });
 }
 
-function showResult(message, type) {
-    const result = $('#result');
-    result.text(message);
-    result.removeClass('success error').addClass(type);
-    setTimeout(() => result.text(''), 3000);
-}
-
-function endGame() {
-    clearInterval(gameInterval);
-    isListening = false;
-    const score = parseInt($('#score').text().split(': ')[1]);
-    $('#current-player').text('Game Over!');
-    $('#instructions').text('Press Start to begin');
-    showResult(`Game Over! Final Score: ${score}`, 'info');
+function showResult(message, success) {
+    const resultDiv = document.getElementById('result');
+    resultDiv.textContent = message;
+    resultDiv.className = `result ${success ? 'success' : 'error'}`;
 }
 
 function showRules() {
-    $.get('/show_rules/', function(response) {
-        $('#rules-content').html(response.rules.replace(/\n/g, '<br>'));
-        rulesModal.show();
-    });
+    fetch('/show_rules/')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('rules-content').textContent = data.rules;
+            const rulesModal = new bootstrap.Modal(document.getElementById('rulesModal'));
+            rulesModal.show();
+        })
+        .catch(error => {
+            console.error('Error loading rules:', error);
+            showResult('Error loading rules. Please try again.', false);
+        });
 }
 
-function checkMicrophone() {
-    $.get('/check_microphone/', function(response) {
-        if (!response.available) {
-            showResult('Microphone not available. Voice input disabled.', 'error');
+function endGame() {
+    isListening = false;
+    const playerName = prompt('Game Over! Enter your name to save your score:');
+    if (playerName) {
+        fetch('/save_score/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            },
+            body: JSON.stringify({
+                player_name: playerName,
+                score: parseInt(document.getElementById('score').textContent.split(': ')[1]) || 0
+            })
+        });
+    }
+    document.getElementById('instructions').textContent = 'Click "Start Game" to play again!';
+    document.getElementById('current-player').textContent = '';
+}
+
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
         }
-    });
+    }
+    return cookieValue;
 }
 </script>
 {% endblock %} 

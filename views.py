@@ -283,17 +283,32 @@ def index(request):
 
 @require_http_methods(["GET"])
 def start_game(request):
-    game_state.score = 0
-    game_state.current_player = random.choice(MLB_PLAYERS)
-    game_state.required_letter = game_state.current_player.split()[-1][0]
-    game_state.time_left = 10
-    
-    return JsonResponse({
-        'current_player': game_state.current_player,
-        'required_letter': game_state.required_letter,
-        'score': game_state.score,
-        'time_left': game_state.time_left
-    })
+    try:
+        # Reset game state
+        game_state.score = 0
+        game_state.current_player = random.choice(MLB_PLAYERS)
+        game_state.required_letter = game_state.current_player.split()[-1][0]
+        game_state.time_left = 10
+        game_state.is_listening = False
+        
+        # Initialize speech recognizer
+        game_state.recognizer = sr.Recognizer()
+        game_state.recognizer.dynamic_energy_threshold = True
+        game_state.recognizer.energy_threshold = 3000
+        game_state.recognizer.dynamic_energy_adjustment_ratio = 1.5
+        
+        return JsonResponse({
+            'current_player': game_state.current_player,
+            'required_letter': game_state.required_letter,
+            'score': game_state.score,
+            'time_left': game_state.time_left
+        })
+    except Exception as e:
+        print(f"Error starting game: {str(e)}")
+        return JsonResponse({
+            'error': 'Failed to start game',
+            'message': str(e)
+        }, status=500)
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -332,31 +347,68 @@ def check_answer(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 def start_speech(request):
+    """Start speech recognition and return the recognized text"""
     try:
-        with sr.Microphone() as source:
-            game_state.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-            audio = game_state.recognizer.listen(source, timeout=4, phrase_time_limit=3)
-            spoken_name = game_state.recognizer.recognize_google(audio)
-            
+        # First check if microphone is available
+        try:
+            with sr.Microphone() as source:
+                pass
+        except Exception as e:
+            print(f"Microphone check failed: {str(e)}")
             return JsonResponse({
-                'success': True,
-                'spoken_name': spoken_name.strip().title()
+                'success': False,
+                'message': 'Microphone not available. Please check your microphone settings and permissions.'
             })
-    except sr.UnknownValueError:
-        return JsonResponse({
-            'success': False,
-            'message': "Could not understand audio"
-        }, status=400)
-    except sr.RequestError:
-        return JsonResponse({
-            'success': False,
-            'message': "Could not reach Google Speech Recognition service"
-        }, status=400)
+
+        r = sr.Recognizer()
+        with sr.Microphone() as source:
+            # Adjust for ambient noise
+            r.adjust_for_ambient_noise(source, duration=1.0)
+            # Set energy threshold for better recognition
+            r.energy_threshold = 3000  # Lowered threshold for better sensitivity
+            # Set pause threshold to be more responsive
+            r.pause_threshold = 0.5  # Reduced pause threshold
+            # Set dynamic energy threshold
+            r.dynamic_energy_threshold = True
+            # Set dynamic energy adjustment ratio
+            r.dynamic_energy_adjustment_ratio = 1.5
+            
+            print("Listening...")
+            try:
+                audio = r.listen(source, timeout=5, phrase_time_limit=5)
+                print("Processing...")
+                
+                try:
+                    text = r.recognize_google(audio)
+                    print(f"Recognized text: {text}")
+                    return JsonResponse({
+                        'success': True,
+                        'spoken_name': text.strip().title()
+                    })
+                except sr.UnknownValueError:
+                    print("Could not understand audio")
+                    return JsonResponse({
+                        'success': False,
+                        'message': 'Could not understand audio. Please speak more clearly.'
+                    })
+                except sr.RequestError as e:
+                    print(f"Could not request results; {str(e)}")
+                    return JsonResponse({
+                        'success': False,
+                        'message': 'Could not reach speech recognition service. Please check your internet connection.'
+                    })
+            except sr.WaitTimeoutError:
+                print("No speech detected within timeout")
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No speech detected. Please try speaking again.'
+                })
     except Exception as e:
+        print(f"Error in speech recognition: {str(e)}")
         return JsonResponse({
             'success': False,
-            'message': f"Error occurred while listening: {str(e)}"
-        }, status=400)
+            'message': f'Error accessing microphone: {str(e)}'
+        })
 
 @require_http_methods(["GET"])
 def show_rules(request):
@@ -402,21 +454,6 @@ def get_state(request):
         'score': game_state.score,
         'time_left': game_state.time_left
     })
-
-def start_speech_recognition(request):
-    """Start speech recognition and return the recognized text"""
-    try:
-        r = sr.Recognizer()
-        with sr.Microphone() as source:
-            audio = r.listen(source, timeout=5)
-            text = r.recognize_google(audio)
-            return JsonResponse({'text': text})
-    except sr.UnknownValueError:
-        return JsonResponse({'error': 'Could not understand audio'})
-    except sr.RequestError as e:
-        return JsonResponse({'error': f'Could not request results; {str(e)}'})
-    except Exception as e:
-        return JsonResponse({'error': str(e)})
 
 def save_score(request):
     """Save the current score"""
