@@ -2,51 +2,22 @@
 
 {% block content %}
 <div class="game-container">
-    <div class="timer" id="timer">10</div>
-    <div class="score" id="score">0</div>
+    <div class="title">Baseball Name Game</div>
     
-    <h2 id="current-player">Ready to Play?</h2>
-
-    <form id="answer-form" class="d-none">
-        <div class="input-group">
-            <input type="text" class="form-control" id="answer" placeholder="Enter player name..." autocomplete="off">
-            <button class="btn btn-primary" type="submit">Submit</button>
-        </div>
-        <div class="text-center mt-2">
-            <button type="button" class="btn btn-info" id="speak-button">
-                <i class="fas fa-microphone"></i> Speak Name
-            </button>
-        </div>
-    </form>
-
-    <div class="text-center">
-        <button id="start-button" class="btn btn-success">Start Game</button>
-        <button id="rules-button" class="btn btn-secondary">Show Rules</button>
+    <div class="instructions" id="instructions">Press Start to begin</div>
+    
+    <div class="player-name" id="current-player"></div>
+    
+    <div class="score" id="score">Score: 0</div>
+    
+    <div class="result" id="result"></div>
+    
+    <div class="buttons">
+        <button id="start-button" class="btn">Start Game</button>
+        <button id="rules-button" class="btn">Show Rules</button>
     </div>
-
-    <div id="alert" class="alert"></div>
-
-    <div class="high-scores">
-        <h4 class="text-center mb-2">High Scores</h4>
-        <div class="table-responsive">
-            <table class="table table-sm">
-                <thead>
-                    <tr>
-                        <th>Player</th>
-                        <th>Score</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for name, score in high_scores %}
-                    <tr>
-                        <td>{{ name }}</td>
-                        <td>{{ score }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    
+    <div class="timer" id="timer">Time: 10</div>
 </div>
 
 <!-- Rules Modal -->
@@ -79,16 +50,6 @@ $(document).ready(function() {
     $('#start-button').click(startGame);
     $('#rules-button').click(showRules);
     
-    $('#answer-form').submit(function(e) {
-        e.preventDefault();
-        const answer = $('#answer').val().trim();
-        if (answer) {
-            checkAnswer(answer);
-        }
-    });
-
-    $('#speak-button').click(startSpeechRecognition);
-    
     // Check microphone availability
     checkMicrophone();
 });
@@ -99,7 +60,7 @@ function updateTimer() {
     lastUpdate = now;
     
     timeLeft -= delta / 1000;
-    $('#timer').text(Math.ceil(timeLeft));
+    $('#timer').text(`Time: ${Math.ceil(timeLeft)}`);
     
     if (timeLeft <= 0) {
         endGame();
@@ -109,53 +70,22 @@ function updateTimer() {
 function startGame() {
     $.get('/start_game/', function(response) {
         $('#current-player').text(response.current_player);
-        $('#answer-form').removeClass('d-none');
-        $('#start-button').addClass('d-none');
-        $('#rules-button').addClass('d-none');
+        $('#instructions').text(`Say a player whose first name starts with '${response.required_letter}'!`);
         timeLeft = 10;
         lastUpdate = Date.now();
-        $('#timer').text(timeLeft);
-        $('#score').text('0');
+        $('#timer').text('Time: 10');
+        $('#score').text('Score: 0');
+        startListening();
         gameInterval = setInterval(updateTimer, 16); // ~60fps for smoother timer
     });
 }
 
-function checkAnswer(answer, isSpeech = false) {
-    $.ajax({
-        url: '/check_answer/',
-        method: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({
-            answer: answer,
-            is_speech: isSpeech
-        }),
-        success: function(response) {
-            if (response.correct) {
-                $('#current-player').text(response.current_player);
-                $('#score').text(response.score);
-                $('#answer').val('');
-                timeLeft = response.time_left;
-                lastUpdate = Date.now();
-                $('#timer').text(timeLeft);
-                showAlert('Correct! Well done!', 'success');
-            } else {
-                showAlert('Incorrect. Try again!', 'danger');
-            }
-        },
-        error: function(xhr) {
-            showAlert('Error: ' + xhr.responseJSON.message, 'danger');
-        }
-    });
-}
-
-function startSpeechRecognition() {
-    if (isListening) {
-        return;
-    }
-
+function startListening() {
+    if (isListening) return;
+    
     isListening = true;
-    $('#speak-button').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Listening...');
-
+    $('#instructions').text('Listening...');
+    
     $.ajax({
         url: '/start_speech/',
         method: 'POST',
@@ -163,57 +93,62 @@ function startSpeechRecognition() {
         data: JSON.stringify({}),
         success: function(response) {
             if (response.success) {
-                $('#answer').val(response.spoken_name);
-                checkAnswer(response.spoken_name, true);
+                checkAnswer(response.spoken_name);
             } else {
-                showAlert('Could not understand audio. Please try again.', 'warning');
+                showResult('Could not understand audio. Please try again.', 'error');
             }
         },
         error: function(xhr) {
-            showAlert('Error: ' + xhr.responseJSON.message, 'danger');
+            showResult(xhr.responseJSON.message, 'error');
         },
         complete: function() {
             isListening = false;
-            $('#speak-button').prop('disabled', false).html('<i class="fas fa-microphone"></i> Speak Name');
+            startListening(); // Continue listening
         }
     });
 }
 
-function showAlert(message, type) {
-    const alert = $('#alert');
-    alert.removeClass().addClass(`alert alert-${type}`);
-    alert.text(message).show();
-    setTimeout(() => alert.fadeOut(), 3000);
+function checkAnswer(answer) {
+    $.ajax({
+        url: '/check_answer/',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ answer: answer }),
+        success: function(response) {
+            if (response.correct) {
+                if (response.game_over) {
+                    clearInterval(gameInterval);
+                    showResult(response.message, 'success');
+                    setTimeout(startGame, 3000);
+                } else {
+                    $('#current-player').text(response.current_player);
+                    $('#instructions').text(`Say a player whose first name starts with '${response.required_letter}'!`);
+                    $('#score').text(`Score: ${response.score}`);
+                    timeLeft = response.time_left;
+                    lastUpdate = Date.now();
+                    showResult(response.message, 'success');
+                }
+            } else {
+                showResult(response.message, 'error');
+            }
+        }
+    });
+}
+
+function showResult(message, type) {
+    const result = $('#result');
+    result.text(message);
+    result.removeClass('success error').addClass(type);
+    setTimeout(() => result.text(''), 3000);
 }
 
 function endGame() {
     clearInterval(gameInterval);
-    $('#answer-form').addClass('d-none');
-    $('#start-button').removeClass('d-none');
-    $('#rules-button').removeClass('d-none');
+    isListening = false;
+    const score = parseInt($('#score').text().split(': ')[1]);
     $('#current-player').text('Game Over!');
-    
-    const score = parseInt($('#score').text());
-    const playerName = prompt('Enter your name for the high score:', 'Anonymous');
-    
-    if (playerName) {
-        $.ajax({
-            url: '/save_score/',
-            method: 'POST',
-            contentType: 'application/json',
-            data: JSON.stringify({
-                player_name: playerName,
-                score: score
-            }),
-            success: function(response) {
-                if (response.success) {
-                    location.reload(); // Refresh to show updated high scores
-                }
-            }
-        });
-    }
-    
-    showAlert(`Game Over! Your final score: ${score}`, 'info');
+    $('#instructions').text('Press Start to begin');
+    showResult(`Game Over! Final Score: ${score}`, 'info');
 }
 
 function showRules() {
@@ -226,8 +161,7 @@ function showRules() {
 function checkMicrophone() {
     $.get('/check_microphone/', function(response) {
         if (!response.available) {
-            $('#speak-button').prop('disabled', true);
-            showAlert('Microphone not available. Voice input disabled.', 'warning');
+            showResult('Microphone not available. Voice input disabled.', 'error');
         }
     });
 }
