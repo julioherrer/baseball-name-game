@@ -87,6 +87,7 @@ let gameInterval;
 let timeLeft = 10;
 let isListening = false;
 let rulesModal;
+let lastUpdate = Date.now();
 
 $(document).ready(function() {
     rulesModal = new bootstrap.Modal(document.getElementById('rulesModal'));
@@ -109,8 +110,13 @@ $(document).ready(function() {
 });
 
 function updateTimer() {
-    timeLeft--;
-    $('#timer').text(timeLeft);
+    const now = Date.now();
+    const delta = now - lastUpdate;
+    lastUpdate = now;
+    
+    timeLeft -= delta / 1000;
+    $('#timer').text(Math.ceil(timeLeft));
+    
     if (timeLeft <= 0) {
         endGame();
     }
@@ -123,9 +129,10 @@ function startGame() {
         $('#start-button').addClass('d-none');
         $('#rules-button').addClass('d-none');
         timeLeft = 10;
+        lastUpdate = Date.now();
         $('#timer').text(timeLeft);
         $('#score').text('0');
-        gameInterval = setInterval(updateTimer, 1000);
+        gameInterval = setInterval(updateTimer, 16); // ~60fps for smoother timer
     });
 }
 
@@ -144,6 +151,7 @@ function checkAnswer(answer, isSpeech = false) {
                 $('#score').text(response.score);
                 $('#answer').val('');
                 timeLeft = response.time_left;
+                lastUpdate = Date.now();
                 $('#timer').text(timeLeft);
                 showAlert('Correct! Well done!', 'success');
             } else {
