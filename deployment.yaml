@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: baseball-name-game
+  namespace: default
 spec:
   replicas: 1
   selector:
@@ -14,34 +15,48 @@ spec:
     spec:
       containers:
       - name: baseball-name-game
-        image: baseball-game:latest
-        ports:
-        - containerPort: 8000
+        image: localhost:5000/baseball-game:latest
+        imagePullPolicy: Never
         env:
         - name: PYTHONUNBUFFERED
           value: "1"
+        - name: ALSA_CARD
+          value: "Generic"
+        - name: ALSA_DEVICE
+          value: "default"
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - name: dev-snd
+          mountPath: /dev/snd
+        - name: asound-config
+          mountPath: /etc/asound.conf
+          subPath: asound.conf
+        securityContext:
+          privileged: true
         resources:
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            cpu: 500m
+            memory: 512Mi
           requests:
-            memory: "256Mi"
-            cpu: "250m"
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 5
+            cpu: 250m
+            memory: 256Mi
         livenessProbe:
           httpGet:
             path: /
             port: 8000
           initialDelaySeconds: 20
           periodSeconds: 10
-        volumeMounts:
-        - name: app-volume
-          mountPath: /app
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
       volumes:
-      - name: app-volume
-        emptyDir: {} 
+      - name: dev-snd
+        hostPath:
+          path: /dev/snd
+      - name: asound-config
+        configMap:
+          name: asound-config 
