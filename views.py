@@ -4,16 +4,29 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 import random
 import json
-import speech_recognition as sr
-import time
+import numpy as np
+from vosk import Model, KaldiRecognizer
+import wave
+import io
 import os
-import subprocess
-import platform
-import webbrowser
-from datetime import datetime
+import logging
+import azure.cognitiveservices.speech as speechsdk
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize Vosk model and recognizer
+model_path = "model"
+if not os.path.exists(model_path):
+    logger.error(f"Vosk model not found at {model_path}")
+    raise RuntimeError(f"Vosk model not found at {model_path}")
+
+model = Model(model_path)
+rec = KaldiRecognizer(model, 16000)
 
 # List of MLB players
-MLB_PLAYERS = list(set([
+MLB_PLAYERS = [
     # Current Braves (2024)
     "Ronald Acuna Jr", "Matt Olson", "Austin Riley", "Ozzie Albies",
     "Michael Harris II", "Sean Murphy", "Orlando Arcia", "Marcell Ozuna",
@@ -73,6 +86,32 @@ MLB_PLAYERS = list(set([
     "Alfonso Soriano", "Nick Johnson", "Chad Cordero", "Livan Hernandez",
     "John Patterson", "Brad Wilkerson", "Jose Guillen", "Cristian Guzman",
     "Jose Vidro", "John Lannan", "Austin Kearns", "Felipe Lopez",
+    
+    # Boston Red Sox - Current and All-Time Greats
+    "Rafael Devers", "Trevor Story", "Jarren Duran", "Triston Casas", "Masataka Yoshida",
+    "Tyler O'Neill", "Connor Wong", "Reese McGuire", "Enmanuel Valdez", "Ceddanne Rafaela",
+    "Wilyer Abreu", "Vaughn Grissom", "Bobby Dalbec", "Garrett Whitlock", "Brayan Bello",
+    "Kutter Crawford", "Nick Pivetta", "Tanner Houck", "Josh Winckowski", "Kenley Jansen",
+    "Chris Martin", "Brennan Bernardino", "Justin Slaten", "Joely Rodriguez", "Zack Kelly",
+    # All-time greats
+    "Ted Williams", "Carl Yastrzemski", "David Ortiz", "Pedro Martinez", "Jim Rice",
+    "Wade Boggs", "Dustin Pedroia", "Mookie Betts", "Nomar Garciaparra", "Roger Clemens",
+    "Jason Varitek", "Johnny Damon", "Manny Ramirez", "Dwight Evans", "Luis Tiant",
+    "Tim Wakefield", "Curt Schilling", "Bill Lee", "Rico Petrocelli", "Mo Vaughn",
+    "Jimmie Foxx", "Bobby Doerr", "Dom DiMaggio", "Carlton Fisk", "Tony Conigliaro",
+    "Jackie Bradley Jr.", "Mike Lowell", "Kevin Youkilis", "Shane Victorino", "Koji Uehara",
+    "Keith Foulke", "Jon Lester", "Clay Buchholz", "Rich Gedman", "Ellis Burks",
+    "Trot Nixon", "Bill Mueller", "John Valentin", "Reggie Smith", "Frank Malzone",
+    "George Scott", "Harry Hooper", "Mel Parnell", "Joe Cronin", "Dick Radatz",
+    "Jim Lonborg", "Fred Lynn", "Rick Burleson", "Tom Brunansky", "Dave Henderson",
+    "Mike Greenwell", "Butch Hobson", "Steve Crawford", "Bob Stanley", "Bill Monbouquette",
+    "Gene Conley", "Marty Barrett", "Jerry Remy", "Rick Wise", "Dennis Eckersley",
+    "Ellis Kinder", "Johnny Pesky", "Vern Stephens", "Tex Hughson", "Joe Dobson",
+    "Boo Ferriss", "Denny Galehouse", "Sam Horn", "Billy Goodman", "Pinky Higgins",
+    "Herb Pennock", "Everett Scott", "Chick Stahl", "Tris Speaker", "Babe Ruth",
+    "Smoky Joe Wood", "Dutch Leonard", "Ray Collins", "Larry Gardner", "Duffy Lewis",
+    "Heinie Wagner", "Bill Carrigan", "Jake Stahl", "Harry Lord", "Buck Freeman",
+    "Jimmy Collins", "Cy Young",
     
     # Current Rays (2024)
     "Randy Arozarena", "Yandy Diaz", "Isaac Paredes", "Josh Lowe",
@@ -244,242 +283,162 @@ MLB_PLAYERS = list(set([
     # Historical Astros
     "Lance Berkman", "Roy Oswalt", "Jeff Kent", "Carlos Lee",
     "Hunter Pence", "Michael Bourn", "Wandy Rodriguez", "Brad Lidge"
-]))
+]
 
 class GameState:
     def __init__(self):
+        self.current_player = None
         self.score = 0
-        self.current_player = ""
+        self.time_left = 30
+        self.is_running = False
         self.required_letter = ""
-        self.is_listening = False
-        self.time_left = 10
-        self.recognizer = sr.Recognizer()
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.energy_threshold = 4000
-        self.recognizer.dynamic_energy_adjustment_ratio = 1.5
+        self.recognized_text = ""
 
-    def get_next_player(self, spoken_name):
-        # Get the first letter of the spoken player's last name
-        last_name_letter = spoken_name.split()[-1][0]
-        
-        # Find a valid player whose first name starts with that letter
-        valid_players = [p for p in MLB_PLAYERS 
-                        if p.split()[0][0].lower() == last_name_letter.lower() 
-                        and p != spoken_name]
-        
-        if valid_players:
-            self.current_player = random.choice(valid_players)
-            self.required_letter = self.current_player.split()[-1][0]
-            return True
-        return False
-
-# Global game state
 game_state = GameState()
 
 def index(request):
-    return render(request, 'game/index.html', {
-        'high_scores': []  # We'll implement high scores later
+    return render(request, 'index.html')
+
+def start_game(request):
+    game_state.current_player = random.choice(MLB_PLAYERS)
+    game_state.score = 0
+    game_state.time_left = 30
+    game_state.is_running = True
+    game_state.required_letter = game_state.current_player.split()[-1][0]
+    
+    return JsonResponse({
+        'player': game_state.current_player,
+        'time_left': game_state.time_left,
+        'score': game_state.score,
+        'required_letter': game_state.required_letter
     })
 
-@require_http_methods(["GET"])
-def start_game(request):
+def start_recognition(request):
     try:
-        # Reset game state
-        game_state.score = 0
-        game_state.current_player = random.choice(MLB_PLAYERS)
-        game_state.required_letter = game_state.current_player.split()[-1][0]
-        game_state.time_left = 10
-        game_state.is_listening = False
-        
-        # Initialize speech recognizer
-        game_state.recognizer = sr.Recognizer()
-        game_state.recognizer.dynamic_energy_threshold = True
-        game_state.recognizer.energy_threshold = 3000
-        game_state.recognizer.dynamic_energy_adjustment_ratio = 1.5
-        
-        return JsonResponse({
-            'current_player': game_state.current_player,
-            'required_letter': game_state.required_letter,
-            'score': game_state.score,
-            'time_left': game_state.time_left
-        })
-    except Exception as e:
-        print(f"Error starting game: {str(e)}")
-        return JsonResponse({
-            'error': 'Failed to start game',
-            'message': str(e)
-        }, status=500)
+        # Create speech configuration
+        speech_config = speechsdk.SpeechConfig(
+            subscription=os.getenv('AZURE_SPEECH_KEY'),
+            region=os.getenv('AZURE_SPEECH_REGION')
+        )
+        speech_config.speech_recognition_language = "en-US"
 
-@csrf_exempt
-@require_http_methods(["POST"])
-def check_answer(request):
-    data = json.loads(request.body)
-    spoken_name = data.get('answer', '').strip().title()
-    
-    # Check if the first letter of the FIRST name matches the required letter
-    spoken_first_name = spoken_name.split()[0]
-    if spoken_first_name[0].lower() == game_state.required_letter.lower():
-        game_state.score += 1
+        # Create audio configuration
+        audio_config = speechsdk.audio.AudioConfig(use_default_microphone=True)
+        speech_recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config, 
+            audio_config=audio_config
+        )
         
-        if game_state.get_next_player(spoken_name):
+        # Start recognition
+        result = speech_recognizer.recognize_once_async().get()
+        
+        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            game_state.recognized_text = result.text.strip()
             return JsonResponse({
-                'correct': True,
-                'current_player': game_state.current_player,
-                'required_letter': game_state.required_letter,
-                'score': game_state.score,
-                'time_left': 10,  # Reset timer on correct answer
-                'message': f"Correct! {spoken_name}"
+                'success': True,
+                'text': game_state.recognized_text
             })
         else:
             return JsonResponse({
-                'correct': True,
-                'game_over': True,
-                'win': True,
+                'success': False,
+                'error': 'No speech detected'
+            })
+            
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        })
+
+def check_answer(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        answer = data.get('answer', '').strip().title()
+        
+        # Check if the first letter of the FIRST name matches the required letter
+        spoken_first_name = answer.split()[0]
+        if spoken_first_name[0].lower() == game_state.required_letter.lower():
+            game_state.score += 1
+            
+            # Get the first letter of the spoken player's last name
+            last_name_letter = answer.split()[-1][0]
+            
+            # Find a valid player whose first name starts with that letter
+            valid_players = [p for p in MLB_PLAYERS 
+                            if p.split()[0][0].lower() == last_name_letter.lower() 
+                            and p != answer]
+            
+            if valid_players:
+                game_state.current_player = random.choice(valid_players)
+                game_state.required_letter = game_state.current_player.split()[-1][0]
+                return JsonResponse({
+                    'correct': True,
+                    'player': game_state.current_player,
+                    'score': game_state.score,
+                    'required_letter': game_state.required_letter,
+                    'message': f"Correct! Next player: {game_state.current_player}"
+                })
+            else:
+                return JsonResponse({
+                    'correct': True,
+                    'message': f"Congratulations! No more valid players available! You win!",
+                    'score': game_state.score,
+                    'game_over': True
+                })
+        else:
+            return JsonResponse({
+                'correct': False,
+                'player': game_state.current_player,
                 'score': game_state.score,
-                'message': "No more valid players available! You win!"
+                'message': f"Invalid name. First name must start with '{game_state.required_letter}'"
             })
     
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
+
+def get_state(request):
     return JsonResponse({
-        'correct': False,
-        'message': f"Invalid name. First name must start with '{game_state.required_letter}': {spoken_name}"
+        'player': game_state.current_player,
+        'time_left': game_state.time_left,
+        'score': game_state.score,
+        'required_letter': game_state.required_letter
+    })
+
+@require_http_methods(["GET"])
+def show_rules(request):
+    return JsonResponse({
+        'rules': [
+            'Say the name of an MLB player when prompted',
+            'The player\'s name must start with the last letter of the previous player\'s name',
+            'You have 10 seconds to name as many players as possible',
+            'Each correct answer adds 1 point to your score',
+            'The game ends when you run out of time or can\'t think of another valid player'
+        ]
     })
 
 @csrf_exempt
 @require_http_methods(["POST"])
-def start_speech(request):
-    """Start speech recognition and return the recognized text"""
-    try:
-        # First check if microphone is available
-        try:
-            with sr.Microphone() as source:
-                pass
-        except Exception as e:
-            print(f"Microphone check failed: {str(e)}")
-            return JsonResponse({
-                'success': False,
-                'message': 'Microphone not available. Please check your microphone settings and permissions.'
-            })
-
-        r = sr.Recognizer()
-        with sr.Microphone() as source:
-            # Adjust for ambient noise
-            r.adjust_for_ambient_noise(source, duration=1.0)
-            # Set energy threshold for better recognition
-            r.energy_threshold = 3000  # Lowered threshold for better sensitivity
-            # Set pause threshold to be more responsive
-            r.pause_threshold = 0.5  # Reduced pause threshold
-            # Set dynamic energy threshold
-            r.dynamic_energy_threshold = True
-            # Set dynamic energy adjustment ratio
-            r.dynamic_energy_adjustment_ratio = 1.5
-            
-            print("Listening...")
-            try:
-                audio = r.listen(source, timeout=5, phrase_time_limit=5)
-                print("Processing...")
-                
-                try:
-                    text = r.recognize_google(audio)
-                    print(f"Recognized text: {text}")
-                    return JsonResponse({
-                        'success': True,
-                        'spoken_name': text.strip().title()
-                    })
-                except sr.UnknownValueError:
-                    print("Could not understand audio")
-                    return JsonResponse({
-                        'success': False,
-                        'message': 'Could not understand audio. Please speak more clearly.'
-                    })
-                except sr.RequestError as e:
-                    print(f"Could not request results; {str(e)}")
-                    return JsonResponse({
-                        'success': False,
-                        'message': 'Could not reach speech recognition service. Please check your internet connection.'
-                    })
-            except sr.WaitTimeoutError:
-                print("No speech detected within timeout")
-                return JsonResponse({
-                    'success': False,
-                    'message': 'No speech detected. Please try speaking again.'
-                })
-    except Exception as e:
-        print(f"Error in speech recognition: {str(e)}")
-        return JsonResponse({
-            'success': False,
-            'message': f'Error accessing microphone: {str(e)}'
-        })
-
-@require_http_methods(["GET"])
-def show_rules(request):
-    rules_text = """Baseball Name Game Rules:
-
-1. The game starts by showing you a baseball player's name
-2. You must say a player whose FIRST NAME starts with the 
-   first letter of the LAST NAME of the previous player
-3. You have 10 seconds to give each answer
-4. The clock resets to 10 seconds after each correct answer
-5. Game ends when the time runs out
-
-Example:
-If the game shows "Mookie Betts"
-- You need to say a player whose first name starts with 'B'
-- If you say "Bobby Witt Jr", that's correct!
-- Then you need a player whose first name starts with 'W'
-- And so on...
-
-Tips:
-- Speak clearly into your microphone
-- Watch the clock - you have 10 seconds per turn
-- Your score increases with each correct answer
-
-Ready to play? Click 'Start Game' to begin!"""
-    
-    return JsonResponse({'rules': rules_text})
-
-@require_http_methods(["GET"])
-def check_microphone(request):
-    try:
-        with sr.Microphone() as source:
-            game_state.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-            return JsonResponse({'available': True})
-    except:
-        return JsonResponse({'available': False})
-
-def get_state(request):
-    """Return the current game state"""
-    return JsonResponse({
-        'current_player': game_state.current_player,
-        'required_letter': game_state.required_letter,
-        'score': game_state.score,
-        'time_left': game_state.time_left
-    })
-
 def save_score(request):
-    """Save the current score"""
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            score = data.get('score', 0)
-            player_name = data.get('player_name', 'Anonymous')
-            
-            # Load existing scores
-            scores = []
-            if os.path.exists('high_scores.json'):
-                with open('high_scores.json', 'r') as f:
-                    scores = json.load(f)
-            
-            # Add new score
-            scores.append({'name': player_name, 'score': score})
-            
-            # Sort scores and keep top 5
-            scores = sorted(scores, key=lambda x: x['score'], reverse=True)[:5]
-            
-            # Save scores
-            with open('high_scores.json', 'w') as f:
-                json.dump(scores, f)
-            
-            return JsonResponse({'success': True})
-        except Exception as e:
-            return JsonResponse({'error': str(e)})
-    return JsonResponse({'error': 'Invalid request method'})
+    try:
+        data = json.loads(request.body)
+        score = data.get('score', 0)
+        player_name = data.get('player_name', 'Anonymous')
+        
+        # Load existing scores
+        scores = []
+        if os.path.exists('high_scores.json'):
+            with open('high_scores.json', 'r') as f:
+                scores = json.load(f)
+        
+        # Add new score
+        scores.append({'name': player_name, 'score': score})
+        
+        # Sort scores and keep top 5
+        scores = sorted(scores, key=lambda x: x['score'], reverse=True)[:5]
+        
+        # Save scores
+        with open('high_scores.json', 'w') as f:
+            json.dump(scores, f)
+        
+        return JsonResponse({'success': True})
+    except Exception as e:
+        return JsonResponse({'error': str(e)})
