@@ -4,26 +4,15 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 import random
 import json
-import numpy as np
-from vosk import Model, KaldiRecognizer
-import wave
-import io
 import os
 import logging
 import azure.cognitiveservices.speech as speechsdk
+import threading
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Initialize Vosk model and recognizer
-model_path = "model"
-if not os.path.exists(model_path):
-    logger.error(f"Vosk model not found at {model_path}")
-    raise RuntimeError(f"Vosk model not found at {model_path}")
-
-model = Model(model_path)
-rec = KaldiRecognizer(model, 16000)
 
 # List of MLB players
 MLB_PLAYERS = [
@@ -86,32 +75,6 @@ MLB_PLAYERS = [
     "Alfonso Soriano", "Nick Johnson", "Chad Cordero", "Livan Hernandez",
     "John Patterson", "Brad Wilkerson", "Jose Guillen", "Cristian Guzman",
     "Jose Vidro", "John Lannan", "Austin Kearns", "Felipe Lopez",
-    
-    # Boston Red Sox - Current and All-Time Greats
-    "Rafael Devers", "Trevor Story", "Jarren Duran", "Triston Casas", "Masataka Yoshida",
-    "Tyler O'Neill", "Connor Wong", "Reese McGuire", "Enmanuel Valdez", "Ceddanne Rafaela",
-    "Wilyer Abreu", "Vaughn Grissom", "Bobby Dalbec", "Garrett Whitlock", "Brayan Bello",
-    "Kutter Crawford", "Nick Pivetta", "Tanner Houck", "Josh Winckowski", "Kenley Jansen",
-    "Chris Martin", "Brennan Bernardino", "Justin Slaten", "Joely Rodriguez", "Zack Kelly",
-    # All-time greats
-    "Ted Williams", "Carl Yastrzemski", "David Ortiz", "Pedro Martinez", "Jim Rice",
-    "Wade Boggs", "Dustin Pedroia", "Mookie Betts", "Nomar Garciaparra", "Roger Clemens",
-    "Jason Varitek", "Johnny Damon", "Manny Ramirez", "Dwight Evans", "Luis Tiant",
-    "Tim Wakefield", "Curt Schilling", "Bill Lee", "Rico Petrocelli", "Mo Vaughn",
-    "Jimmie Foxx", "Bobby Doerr", "Dom DiMaggio", "Carlton Fisk", "Tony Conigliaro",
-    "Jackie Bradley Jr.", "Mike Lowell", "Kevin Youkilis", "Shane Victorino", "Koji Uehara",
-    "Keith Foulke", "Jon Lester", "Clay Buchholz", "Rich Gedman", "Ellis Burks",
-    "Trot Nixon", "Bill Mueller", "John Valentin", "Reggie Smith", "Frank Malzone",
-    "George Scott", "Harry Hooper", "Mel Parnell", "Joe Cronin", "Dick Radatz",
-    "Jim Lonborg", "Fred Lynn", "Rick Burleson", "Tom Brunansky", "Dave Henderson",
-    "Mike Greenwell", "Butch Hobson", "Steve Crawford", "Bob Stanley", "Bill Monbouquette",
-    "Gene Conley", "Marty Barrett", "Jerry Remy", "Rick Wise", "Dennis Eckersley",
-    "Ellis Kinder", "Johnny Pesky", "Vern Stephens", "Tex Hughson", "Joe Dobson",
-    "Boo Ferriss", "Denny Galehouse", "Sam Horn", "Billy Goodman", "Pinky Higgins",
-    "Herb Pennock", "Everett Scott", "Chick Stahl", "Tris Speaker", "Babe Ruth",
-    "Smoky Joe Wood", "Dutch Leonard", "Ray Collins", "Larry Gardner", "Duffy Lewis",
-    "Heinie Wagner", "Bill Carrigan", "Jake Stahl", "Harry Lord", "Buck Freeman",
-    "Jimmy Collins", "Cy Young",
     
     # Current Rays (2024)
     "Randy Arozarena", "Yandy Diaz", "Isaac Paredes", "Josh Lowe",
@@ -233,8 +196,6 @@ MLB_PLAYERS = [
     # Historical Orioles
     "Frank Robinson", "Brooks Robinson", "Boog Powell", "Paul Blair",
     "Dave Johnson", "Mark Belanger", "Don Buford", "Elrod Hendricks",
-    "Jim Palmer", "Dave McNally", "Mike Cuellar", "Pete Richert",
-    "Rafael Palmeiro", "Roberto Alomar", "Brady Anderson", "Mike Mussina",
     
     # Current Cubs (2024)
     "Dansby Swanson", "Seiya Suzuki", "Ian Happ", "Christopher Morel",
@@ -282,39 +243,168 @@ MLB_PLAYERS = [
     
     # Historical Astros
     "Lance Berkman", "Roy Oswalt", "Jeff Kent", "Carlos Lee",
-    "Hunter Pence", "Michael Bourn", "Wandy Rodriguez", "Brad Lidge"
+    "Hunter Pence", "Michael Bourn", "Wandy Rodriguez", "Brad Lidge",
+    
+    # Boston Red Sox - Current and All-Time Greats
+    "Rafael Devers", "Trevor Story", "Jarren Duran", "Triston Casas", "Masataka Yoshida",
+    "Tyler O'Neill", "Connor Wong", "Reese McGuire", "Enmanuel Valdez", "Ceddanne Rafaela",
+    "Wilyer Abreu", "Vaughn Grissom", "Bobby Dalbec", "Garrett Whitlock", "Brayan Bello",
+    "Kutter Crawford", "Nick Pivetta", "Tanner Houck", "Josh Winckowski", "Kenley Jansen",
+    "Chris Martin", "Brennan Bernardino", "Justin Slaten", "Joely Rodriguez", "Zack Kelly",
+    # All-time greats
+    "Ted Williams", "Carl Yastrzemski", "David Ortiz", "Pedro Martinez", "Jim Rice",
+    "Wade Boggs", "Dustin Pedroia", "Mookie Betts", "Nomar Garciaparra", "Roger Clemens",
+    "Jason Varitek", "Johnny Damon", "Manny Ramirez", "Dwight Evans", "Luis Tiant",
+    "Tim Wakefield", "Curt Schilling", "Bill Lee", "Rico Petrocelli", "Mo Vaughn",
+    "Jimmie Foxx", "Bobby Doerr", "Dom DiMaggio", "Carlton Fisk", "Tony Conigliaro",
+    "Jackie Bradley Jr.", "Mike Lowell", "Kevin Youkilis", "Shane Victorino", "Koji Uehara",
+    "Keith Foulke", "Jon Lester", "Clay Buchholz", "Rich Gedman", "Ellis Burks",
+    "Trot Nixon", "Bill Mueller", "John Valentin", "Reggie Smith", "Frank Malzone",
+    "George Scott", "Harry Hooper", "Mel Parnell", "Joe Cronin", "Dick Radatz",
+    "Jim Lonborg", "Fred Lynn", "Rick Burleson", "Tom Brunansky", "Dave Henderson",
+    "Mike Greenwell", "Butch Hobson", "Steve Crawford", "Bob Stanley", "Bill Monbouquette",
+    "Gene Conley", "Marty Barrett", "Jerry Remy", "Rick Wise", "Dennis Eckersley",
+    "Ellis Kinder", "Johnny Pesky", "Vern Stephens", "Tex Hughson", "Joe Dobson",
+    "Boo Ferriss", "Denny Galehouse", "Sam Horn", "Billy Goodman", "Pinky Higgins",
+    "Herb Pennock", "Everett Scott", "Chick Stahl", "Tris Speaker", "Babe Ruth",
+    "Smoky Joe Wood", "Dutch Leonard", "Ray Collins", "Larry Gardner", "Duffy Lewis",
+    "Heinie Wagner", "Bill Carrigan", "Jake Stahl", "Harry Lord", "Buck Freeman",
+    "Jimmy Collins", "Cy Young"
 ]
 
 class GameState:
     def __init__(self):
         self.current_player = None
         self.score = 0
-        self.time_left = 30
+        self.time_left = 10
         self.is_running = False
         self.required_letter = ""
-        self.recognized_text = ""
+        self.timer_thread = None
+        self.lock = threading.Lock()
+        self.used_players = set()  # Track used players to avoid repetition
+        self.is_listening = False
+        self.game_phase = "waiting"
+        self.feedback_message = ""
+        self.last_spoken_name = ""
 
+    def reset(self):
+        with self.lock:
+            try:
+                # Get a random player that hasn't been used
+                available_players = [p for p in MLB_PLAYERS if p not in self.used_players]
+                if not available_players:
+                    available_players = MLB_PLAYERS  # Reset if all players used
+                    self.used_players.clear()
+                
+                self.current_player = random.choice(available_players)
+                self.used_players.add(self.current_player)
+                self.score = 0
+                self.time_left = 10
+                self.is_running = True
+                self.is_listening = False
+                self.game_phase = "playing"
+                self.feedback_message = ""
+                self.last_spoken_name = ""
+                
+                # Get the last letter of the player's last name
+                self.required_letter = self.current_player.split()[-1][-1].lower()
+                
+                # Stop any existing timer thread
+                if self.timer_thread and self.timer_thread.is_alive():
+                    self.is_running = False
+                    self.timer_thread.join(timeout=1.0)
+                
+                # Start new timer thread
+                self.timer_thread = threading.Thread(target=self.run_timer)
+                self.timer_thread.daemon = True
+                self.timer_thread.start()
+                
+            except Exception as e:
+                logger.error(f"Error in game state reset: {str(e)}")
+                raise
+
+    def run_timer(self):
+        while self.is_running and self.time_left > 0:
+            time.sleep(1)
+            with self.lock:
+                self.time_left -= 1
+                if self.time_left <= 0:
+                    self.is_running = False
+                    break
+
+# Create a global game state instance
 game_state = GameState()
 
 def index(request):
-    return render(request, 'index.html')
+    return render(request, 'game/index.html')
 
+@csrf_exempt
+@require_http_methods(["POST"])
 def start_game(request):
-    game_state.current_player = random.choice(MLB_PLAYERS)
-    game_state.score = 0
-    game_state.time_left = 30
-    game_state.is_running = True
-    game_state.required_letter = game_state.current_player.split()[-1][0]
-    
-    return JsonResponse({
-        'player': game_state.current_player,
-        'time_left': game_state.time_left,
-        'score': game_state.score,
-        'required_letter': game_state.required_letter
-    })
-
-def start_recognition(request):
     try:
+        # Reset the game state
+        game_state.reset()
+        
+        # Ensure the game state is properly initialized
+        if not game_state.current_player or not game_state.required_letter:
+            logger.error("Game state not properly initialized")
+            return JsonResponse({
+                'success': False,
+                'message': 'Failed to initialize game state'
+            }, status=500)
+            
+        return JsonResponse({
+            'success': True,
+            'player': game_state.current_player,
+            'score': game_state.score,
+            'time_left': game_state.time_left,
+            'required_letter': game_state.required_letter,
+            'message': f"Say a player whose first name starts with '{game_state.required_letter}'"
+        })
+    except Exception as e:
+        logger.error(f"Error starting game: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'message': 'Failed to start game'
+        }, status=500)
+
+@require_http_methods(["GET"])
+def timer(request):
+    try:
+        with game_state.lock:
+            return JsonResponse({
+                'success': True,
+                'time_left': game_state.time_left,
+                'is_running': game_state.is_running
+            })
+    except Exception as e:
+        logger.error(f"Error getting timer state: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'message': 'Failed to get timer state'
+        }, status=500)
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def start_recognition(request):
+    """Start speech recognition using Azure."""
+    try:
+        if game_state.is_listening:
+            return JsonResponse({
+                'success': False,
+                'error': 'Already listening'
+            })
+
+        if not game_state.is_running:
+            return JsonResponse({
+                'success': False,
+                'error': 'Game is not running'
+            })
+
+        game_state.is_listening = True
+        game_state.game_phase = "listening"
+        game_state.feedback_message = "Listening..."
+        
         # Create speech configuration
         speech_config = speechsdk.SpeechConfig(
             subscription=os.getenv('AZURE_SPEECH_KEY'),
@@ -331,85 +421,149 @@ def start_recognition(request):
         
         # Start recognition
         result = speech_recognizer.recognize_once_async().get()
+        game_state.is_listening = False
         
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
             game_state.recognized_text = result.text.strip()
+            game_state.game_phase = "checking"
+            game_state.feedback_message = "Checking your answer..."
             return JsonResponse({
                 'success': True,
-                'text': game_state.recognized_text
+                'text': game_state.recognized_text,
+                'phase': game_state.game_phase,
+                'message': game_state.feedback_message
             })
         else:
+            game_state.game_phase = "speaking"
+            game_state.feedback_message = f"No speech detected. Try again! Say a player whose first name starts with '{game_state.required_letter}'"
             return JsonResponse({
                 'success': False,
-                'error': 'No speech detected'
+                'error': 'No speech detected',
+                'phase': game_state.game_phase,
+                'message': game_state.feedback_message
             })
             
     except Exception as e:
+        game_state.is_listening = False
+        game_state.game_phase = "speaking"
+        game_state.feedback_message = f"Error: {str(e)}. Try again!"
+        logger.error(f"Error in speech recognition: {str(e)}")
         return JsonResponse({
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'phase': game_state.game_phase,
+            'message': game_state.feedback_message
         })
 
+@csrf_exempt
+@require_http_methods(["POST"])
 def check_answer(request):
-    if request.method == 'POST':
+    """Check if the player's answer is valid."""
+    if not game_state.is_running:
+        return JsonResponse({
+            'success': False,
+            'message': 'Game is not running',
+            'game_over': True
+        })
+
+    try:
         data = json.loads(request.body)
         answer = data.get('answer', '').strip().title()
         
-        # Check if the first letter of the FIRST name matches the required letter
-        spoken_first_name = answer.split()[0]
-        if spoken_first_name[0].lower() == game_state.required_letter.lower():
-            game_state.score += 1
-            
-            # Get the first letter of the spoken player's last name
-            last_name_letter = answer.split()[-1][0]
-            
-            # Find a valid player whose first name starts with that letter
-            valid_players = [p for p in MLB_PLAYERS 
-                            if p.split()[0][0].lower() == last_name_letter.lower() 
-                            and p != answer]
-            
-            if valid_players:
-                game_state.current_player = random.choice(valid_players)
-                game_state.required_letter = game_state.current_player.split()[-1][0]
-                return JsonResponse({
-                    'correct': True,
-                    'player': game_state.current_player,
-                    'score': game_state.score,
-                    'required_letter': game_state.required_letter,
-                    'message': f"Correct! Next player: {game_state.current_player}"
-                })
-            else:
-                return JsonResponse({
-                    'correct': True,
-                    'message': f"Congratulations! No more valid players available! You win!",
-                    'score': game_state.score,
-                    'game_over': True
-                })
-        else:
+        # Check if the answer is a valid MLB player
+        if answer not in MLB_PLAYERS:
             return JsonResponse({
-                'correct': False,
+                'success': False,
+                'message': f"'{answer}' is not a valid MLB player. Try again!",
+                'player': game_state.current_player,
+                'required_letter': game_state.required_letter
+            })
+
+        # Check if the player has already been used
+        if answer in game_state.used_players:
+            return JsonResponse({
+                'success': False,
+                'message': f"'{answer}' has already been used. Try another player!",
+                'player': game_state.current_player,
+                'required_letter': game_state.required_letter
+            })
+
+        # Check if the first letter of the answer matches the required letter
+        if answer[0].lower() != game_state.required_letter:
+            return JsonResponse({
+                'success': False,
+                'message': f"Player name must start with '{game_state.required_letter}'. Try again!",
+                'player': game_state.current_player,
+                'required_letter': game_state.required_letter
+            })
+
+        # Answer is correct
+        game_state.score += 1
+        game_state.used_players.add(answer)
+        
+        # Get the last letter of the answered player's last name
+        last_letter = answer.split()[-1][-1].lower()
+        
+        # Find a valid next player
+        valid_players = [p for p in MLB_PLAYERS 
+                        if p not in game_state.used_players 
+                        and p.split()[0][0].lower() == last_letter]
+        
+        if valid_players:
+            game_state.current_player = random.choice(valid_players)
+            game_state.used_players.add(game_state.current_player)
+            game_state.required_letter = game_state.current_player.split()[-1][-1].lower()
+            
+            return JsonResponse({
+                'success': True,
+                'correct': True,
                 'player': game_state.current_player,
                 'score': game_state.score,
-                'message': f"Invalid name. First name must start with '{game_state.required_letter}'"
+                'required_letter': game_state.required_letter,
+                'message': f"Correct! Now say a player whose first name starts with '{game_state.required_letter}'"
             })
-    
-    return JsonResponse({'error': 'Invalid request method'}, status=400)
+        else:
+            # No more valid players
+            game_state.is_running = False
+            return JsonResponse({
+                'success': True,
+                'correct': True,
+                'message': f"Congratulations! No more valid players available! You win with {game_state.score} points!",
+                'score': game_state.score,
+                'game_over': True
+            })
+            
+    except Exception as e:
+        logger.error(f"Error checking answer: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'message': 'Error checking answer. Please try again.'
+        }, status=500)
 
+@require_http_methods(["GET"])
 def get_state(request):
+    """Get the current game state."""
     return JsonResponse({
+        'success': True,
         'player': game_state.current_player,
         'time_left': game_state.time_left,
         'score': game_state.score,
-        'required_letter': game_state.required_letter
+        'required_letter': game_state.required_letter,
+        'is_running': game_state.is_running,
+        'phase': game_state.game_phase,
+        'message': game_state.feedback_message,
+        'last_spoken_name': game_state.last_spoken_name
     })
 
 @require_http_methods(["GET"])
 def show_rules(request):
+    """Show the game rules."""
     return JsonResponse({
+        'success': True,
         'rules': [
             'Say the name of an MLB player when prompted',
             'The player\'s name must start with the last letter of the previous player\'s name',
-            'You have 10 seconds to name as many players as possible',
+            'You have 30 seconds to name as many players as possible',
             'Each correct answer adds 1 point to your score',
             'The game ends when you run out of time or can\'t think of another valid player'
         ]
